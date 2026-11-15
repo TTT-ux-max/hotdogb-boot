@@ -1,0 +1,55 @@
+{
+  "device": "OnePlus 7T / hotdogb / sm8150",
+  "partition_size": 100663296,
+  "page_size": 4096,
+  "header_version": 2,
+  "header_size": 1660,
+  "kernel": {
+    "offset": "0x8000",
+    "load_addr": "0x8000",
+    "base": "0x00000000"
+  },
+  "ramdisk": {
+    "offset": "0x1000000"
+  },
+  "tags_offset": "0x100",
+  "dtb": {
+    "offset": "0x1f00000",
+    "size": 4255649
+  },
+  "second": {
+    "size": 0,
+    "offset": "0x0"
+  },
+  "recovery_dtbo": {
+    "size": 0,
+    "offset": "0x0"
+  },
+  "os_version": "11.0.0",
+  "os_patch_level": "2024-02",
+  "cmdline": "androidboot.hardware=qcom androidboot.console=ttyMSM0 androidboot.memcg=1 lpm_levels.sleep_disabled=1 video=vfb:640x400,bpp=32,memsize=3072000 msm_rtb.filter=0x237 service_locator.enable=1 swiotlb=2048 loop.max_part=7 androidboot.usbcontroller=a600000.dwc3 androidboot.vbmeta.avb_version=1.0 buildvariant=userdebug",
+  "product_name": "",
+  "kernel_image": "Image-dtb",
+  "avb": {
+    "footer_size": 64,
+    "vbmeta_offset": 57933824,
+    "vbmeta_size": 704,
+    "original_image_size": 57933824,
+    "hash_algorithm": "sha256",
+    "partition_name": "boot",
+    "salt_hex": "1cf2d3c56858ddcbdeac2c66682149f53f6d194700991eac0fbbb4e116b16505",
+    "salt_len": 32,
+    "digest_len": 32,
+    "digest_offset_in_blob": 424,
+    "image_size_offset_in_blob": 272,
+    "descriptor_flags": 0,
+    "footer": {
+      "original_image_size_offset": 12,
+      "vbmeta_offset_offset": 20,
+      "vbmeta_size_offset": 28,
+      "byte_order": "big"
+    }
+  },
+  "dtb_appended_size": 4255649,
+  "orig_kernel_segment_size": 52840389
+}

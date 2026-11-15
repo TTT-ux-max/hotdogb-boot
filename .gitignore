@@ -1,0 +1,10 @@
+# 运行时生成，不进 GitHub 仓库（全部锚定工程根目录，避免误伤 kernel/ 内的同名子目录）
+/toolchain/
+/out/
+/dist/
+/build-kernel.log
+/config/local.env
+*.raw.img
+.kernel-seg.tmp
+__pycache__/
+*.pyc

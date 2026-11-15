@@ -1,0 +1,101 @@
+name: Build hotdogb boot.img
+
+# 只编译内核 + 重打包 boot 分区，不做全量 ROM 编译。
+# 产物：dist/boot-<profile>.img（96 MiB，可直接 fastboot flash boot）
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: '内核配置档位'
+        required: true
+        default: 'clean'
+        type: choice
+        options: [clean, stock, custom]
+      jobs:
+        description: '编译并发数（4 核 runner 建议 4~6）'
+        required: true
+        default: '4'
+      kernel_src_release:
+        description: '轻量仓库模式：填写 Release tag，从该 Release 下载 kernel-src.7z.* 分卷。留空则用仓库内 kernel/'
+        required: false
+        default: ''
+      use_system_host_tools:
+        description: '使用系统 make/flex/bison（在线 build-tools 下载失败时勾选）'
+        type: boolean
+        default: false
+  push:
+    branches: [main, master]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential make flex bison m4 perl python3 \
+            libncurses5 libtinfo5 libxml2 libzstd1 libssl-dev \
+            bc cpio curl ca-certificates p7zip-full file
+
+      - name: 轻量仓库模式（可选）——从 Release 下载内核源码分卷
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.kernel_src_release != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/ksrc
+          gh release download "${{ inputs.kernel_src_release }}" -p 'kernel-src.7z.*' -D /tmp/ksrc
+          ls -lh /tmp/ksrc
+          rm -rf kernel && mkdir -p kernel
+          7z x -mmt=2 -y /tmp/ksrc/kernel-src.7z.001 -okernel
+          test -d kernel/arch/arm64 || { echo "内核源码解压失败"; exit 1; }
+          echo "内核源码就绪: $(find kernel -type f | wc -l) 文件"
+
+      - name: 恢复工具链缓存
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: hotdogb-toolchain-${{ hashFiles('config/build.env') }}-v1
+
+      - name: 编译内核并生成 boot.img
+        env:
+          PROFILE: ${{ inputs.profile || 'clean' }}
+          JOBS: ${{ inputs.jobs || '4' }}
+          USE_SYSTEM_HOST_TOOLS: ${{ inputs.use_system_host_tools && '1' || '0' }}
+          # 官方源不可达时，在仓库 Settings → Variables 里设置这些变量指向自己的镜像/Release asset
+          CLANG_ARCHIVE_URL: ${{ vars.CLANG_ARCHIVE_URL }}
+          GCC64_URL: ${{ vars.GCC64_URL }}
+          GCC32_URL: ${{ vars.GCC32_URL }}
+          BUILDTOOLS_URL: ${{ vars.BUILDTOOLS_URL }}
+        run: |
+          chmod +x scripts/*.sh tools/*.py
+          ./scripts/build.sh --profile "$PROFILE" --jobs "$JOBS"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotdogb-boot-${{ inputs.profile || 'clean' }}
+          path: |
+            dist/*.img
+            dist/*.sha256
+            dist/verify-*.json
+            out/arch/arm64/boot/Image-dtb
+            out/.config
+            build-kernel.log
+          if-no-files-found: error
+          retention-days: 30
