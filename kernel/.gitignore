@@ -33,6 +33,11 @@
 *.order
 *.patch
 *.s
+# Windows 上 core.ignorecase=true 会让 "*.s" 连 "*.S" 一起匹配，
+# 导致所有汇编源文件（vdso.lds.S / head.S / entry.S ...）被漏提交，
+# CI 会报 "No rule to make target 'arch/arm64/kernel/vdso/vdso.lds'"。
+# 显式解除；Linux CI 上该规则只作用于大写 .S，小写生成物仍被忽略。
+!*.S
 *.so
 *.so.dbg
 *.su
@@ -76,6 +81,8 @@ modules.builtin
 !.gitignore
 !.mailmap
 !.cocciconfig
+!.gitattributes
+!.get_maintainer.ignore
 
 #
 # Generated include files
