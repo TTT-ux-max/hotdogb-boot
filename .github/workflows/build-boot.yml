@@ -99,3 +99,26 @@ jobs:
             build-kernel.log
           if-no-files-found: error
           retention-days: 30
+
+      # 编译失败时把真正的报错行直接打到 run 摘要，并保留完整日志，
+      # 避免 make -j 把 error 淹没在几千行 CC 里、每次都要手工下载日志包。
+      - name: 失败诊断（打印编译错误行）
+        if: failure()
+        run: |
+          if [ -f build-kernel.log ]; then
+            {
+              echo '### 编译错误摘要'
+              echo '```'
+              grep -nE 'make\[[0-9]+\]: \*\*\*|^make: \*\*\*|error:|No rule to make target|fatal error|Permission denied|undefined reference|Killed' build-kernel.log | tail -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+
+      - name: 失败时上传完整构建日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-kernel-log-${{ github.run_id }}
+          path: build-kernel.log
+          if-no-files-found: warn
+          retention-days: 14

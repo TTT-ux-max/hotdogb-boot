@@ -21,6 +21,32 @@ die() { printf '\033[1;31m[kernel] 失败:\033[0m %s\n' "$*" >&2; exit 1; }
 [[ -f "$TC/.ready" ]] || die "工具链未就绪，请先运行 scripts/fetch-toolchain.sh"
 [[ -d "$K/arch/arm64" ]] || die "内核源码缺失: $K"
 
+# ------------------------------------------------- Windows 大小写不敏感补齐
+# Linux 内核里有一批「仅靠大小写区分」的源/头文件，例如
+#   net/netfilter/xt_DSCP.c (target)   vs  xt_dscp.c (match)
+#   include/uapi/linux/netfilter_ipv4/ipt_TTL.h  vs  ipt_ttl.h
+# Windows/NTFS 大小写不敏感，提交时它们会合并成一个，Linux 上编译就会报
+# "No rule to make target 'net/netfilter/xt_DSCP.o'" 或找不到头文件。
+# 大写原件保存在 patches/casefix/（该目录内只有大写版本，Windows 也能共存），
+# 编译前只在大小写敏感的文件系统上还原，绝不覆盖小写版本。
+CASEFIX="$ROOT/patches/casefix"
+case "$(uname -s)" in
+  Linux*)
+    if [[ -d "$CASEFIX" ]]; then
+      while IFS= read -r -d '' src; do
+        rel="${src#$CASEFIX/}"
+        dst="$K/$rel"
+        if [[ ! -e "$dst" ]]; then
+          mkdir -p "$(dirname "$dst")"
+          cp "$src" "$dst"
+          log "casefix: 还原 $rel"
+        fi
+      done < <(find "$CASEFIX" -type f -print0)
+    fi
+    ;;
+  *) log "casefix: 跳过（当前文件系统大小写不敏感，无需还原）" ;;
+esac
+
 # ---------------------------------------------------------------- defconfig 档位
 DEF="$ROOT/defconfig/sm8150-perf_defconfig.$PROFILE"
 [[ -f "$DEF" ]] || die "未知档位 PROFILE=$PROFILE（可用: stock / clean / custom），缺 $DEF"
