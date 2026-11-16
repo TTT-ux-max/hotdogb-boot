@@ -1,4 +1,4 @@
-name: Build hotdogb boot.img
+name: Build hotdogb boot1.img
 
 # 只编译内核 + 重打包 boot 分区，不做全量 ROM 编译。
 # 产物：dist/boot-<profile>.img（96 MiB，可直接 fastboot flash boot）
