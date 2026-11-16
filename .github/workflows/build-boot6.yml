@@ -1,4 +1,8 @@
-name: Build hotdogb boot6img
+
+### 完整工作流
+
+```yaml
+name: Build hotdogb boot.img
 
 # 只编译内核 + 重打包 boot 分区，不做全量 ROM 编译。
 # 产物：dist/boot-<profile>.img（96 MiB，可直接 fastboot flash boot）
@@ -136,20 +140,78 @@ jobs:
             cp -a toolchain "/tmp/${SRC_DIR}/toolchain"
           fi
 
-          # 4) 生成离线编译说明
-          cat > "/tmp/${SRC_DIR}/OFFLINE-BUILD.md" <<'EOF'
-# 离线编译说明
+          # 4) 拷贝离线编译说明（仓库根目录静态文件，避免工作流内联 heredoc 导致 YAML 解析报错）
+          if [ -f OFFLINE-BUILD.md ]; then
+            cp OFFLINE-BUILD.md "/tmp/${SRC_DIR}/OFFLINE-BUILD.md"
+          else
+            echo "警告：仓库根目录未找到 OFFLINE-BUILD.md，源码包中将不含离线说明" >&2
+          fi
 
-本源码包已包含：
-- 内核源码（kernel/）
-- 完整工具链（toolchain/，含 .ready 标记和 dl/ 下载缓存）
+          # 5) 打包（完整 toolchain，不排除任何内容）
+          tar -C /tmp -czf "dist/${SRC_NAME}" "${SRC_DIR}"
+          ls -lh "dist/${SRC_NAME}"
 
-`scripts/fetch-toolchain.sh` 检测到 toolchain/.ready 存在时会直接跳过工具链准备，
-因此解压后编译全程不需要联网。
+          # 6) 生成校验
+          ( cd dist && sha256sum "${SRC_NAME}" > "${SRC_NAME}.sha256" )
 
-## 编译
+      - name: 上传产物到 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotdogb-boot-${{ inputs.profile || 'clean' }}
+          path: |
+            dist/*.img
+            dist/*.sha256
+            dist/*.tar.gz
+            dist/verify-*.json
+            out/arch/arm64/boot/Image-dtb
+            out/.config
+            build-kernel.log
+          if-no-files-found: error
+          retention-days: 30
 
-```bash
-tar -xzf hotdogb-boot-src-<时间>-<档位>.tar.gz
-cd hotdogb-boot-src-<时间>-<档位>
-./scripts/build.sh --profile clean --jobs 4
+      - name: 创建北京时间 Tag
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.taginfo.outputs.TAG }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: 上传产物和离线源码到 Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.taginfo.outputs.TAG }}
+          name: ${{ steps.taginfo.outputs.TAG }}
+          files: |
+            dist/*.img
+            dist/*.sha256
+            dist/*.tar.gz
+            dist/verify-*.json
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: 失败诊断（打印编译错误行）
+        if: failure()
+        run: |
+          if [ -f build-kernel.log ]; then
+            {
+              echo '### 编译错误摘要'
+              echo '```'
+              grep -nE 'make\[[0-9]+\]: \*\*\*|^make: \*\*\*|error:|No rule to make target|fatal error|Permission denied|undefined reference|Killed' build-kernel.log | tail -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+
+      - name: 失败时上传完整构建日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-kernel-log-${{ github.run_id }}
+          path: build-kernel.log
+          if-no-files-found: warn
+          retention-days: 14
