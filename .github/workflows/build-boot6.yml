@@ -1,7 +1,5 @@
-
 ### 完整工作流
 
-```yaml
 name: Build hotdogb boot.img
 
 # 只编译内核 + 重打包 boot 分区，不做全量 ROM 编译。
