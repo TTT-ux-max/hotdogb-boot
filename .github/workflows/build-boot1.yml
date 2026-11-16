@@ -1,7 +1,8 @@
-name: Build hotdogb boot1.img
+name: Build hotdogb boot.img
 
 # 只编译内核 + 重打包 boot 分区，不做全量 ROM 编译。
 # 产物：dist/boot-<profile>.img（96 MiB，可直接 fastboot flash boot）
+# 编译成功后自动按时间打 Tag（如 v20261116-005012）并上传 Release。
 
 on:
   workflow_dispatch:
@@ -26,7 +27,6 @@ on:
         default: false
   push:
     branches: [main, master]
-    tags: ['v*']
     paths-ignore: ['**.md', 'docs/**']
   pull_request:
     paths-ignore: ['**.md', 'docs/**']
@@ -78,7 +78,6 @@ jobs:
           PROFILE: ${{ inputs.profile || 'clean' }}
           JOBS: ${{ inputs.jobs || '4' }}
           USE_SYSTEM_HOST_TOOLS: ${{ inputs.use_system_host_tools && '1' || '0' }}
-          # 官方源不可达时，在仓库 Settings → Variables 里设置这些变量指向自己的镜像/Release asset
           CLANG_ARCHIVE_URL: ${{ vars.CLANG_ARCHIVE_URL }}
           GCC64_URL: ${{ vars.GCC64_URL }}
           GCC32_URL: ${{ vars.GCC32_URL }}
@@ -87,7 +86,7 @@ jobs:
           chmod +x scripts/*.sh tools/*.py
           ./scripts/build.sh --profile "$PROFILE" --jobs "$JOBS"
 
-      - name: 上传产物
+      - name: 上传产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: hotdogb-boot-${{ inputs.profile || 'clean' }}
@@ -101,10 +100,32 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: 上传到 Release（仅 Tag 触发时）
-        if: startsWith(github.ref, 'refs/tags/')
+      # 仅在非 PR 场景下自动打时间 Tag（PR 来自 fork 时无写权限，跳过）
+      - name: 生成时间 Tag 并创建 Release
+        if: github.event_name != 'pull_request'
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PROFILE="${{ inputs.profile || 'clean' }}"
+          TS="$(date -u +'%Y%m%d-%H%M%S')"
+          TAG="v${TS}-${PROFILE}"
+
+          echo "将创建 Tag: $TAG"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: 上传产物到 Release
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release.outputs.TAG }}
+          name: ${{ steps.release.outputs.TAG }}
           files: |
             dist/*.img
             dist/*.sha256
@@ -112,8 +133,6 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
-      # 编译失败时把真正的报错行直接打到 run 摘要，并保留完整日志，
-      # 避免 make -j 把 error 淹没在几千行 CC 里、每次都要手工下载日志包。
       - name: 失败诊断（打印编译错误行）
         if: failure()
         run: |
