@@ -1,0 +1,155 @@
+name: Build hotdogb boot6img
+
+# 只编译内核 + 重打包 boot 分区，不做全量 ROM 编译。
+# 产物：dist/boot-<profile>.img（96 MiB，可直接 fastboot flash boot）
+# 编译成功后自动按北京时间打 Tag（如 v20261116-085012-clean），
+# 并把 boot.img、校验文件、完整离线源码包（含 kernel/ 与整个 toolchain/）一起上传到 Release。
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: '内核配置档位'
+        required: true
+        default: 'clean'
+        type: choice
+        options: [clean, stock, custom]
+      jobs:
+        description: '编译并发数（4 核 runner 建议 4~6）'
+        required: true
+        default: '4'
+      kernel_src_release:
+        description: '轻量仓库模式：填写 Release tag，从该 Release 下载 kernel-src.7z.* 分卷。留空则用仓库内 kernel/'
+        required: false
+        default: ''
+      use_system_host_tools:
+        description: '使用系统 make/flex/bison（在线 build-tools 下载失败时勾选）'
+        type: boolean
+        default: false
+  push:
+    branches: [main, master]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential make flex bison m4 perl python3 \
+            libncurses5 libtinfo5 libxml2 libzstd1 libssl-dev \
+            bc cpio curl ca-certificates p7zip-full file
+
+      - name: 轻量仓库模式（可选）——从 Release 下载内核源码分卷
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.kernel_src_release != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/ksrc
+          gh release download "${{ inputs.kernel_src_release }}" -p 'kernel-src.7z.*' -D /tmp/ksrc
+          ls -lh /tmp/ksrc
+          rm -rf kernel && mkdir -p kernel
+          7z x -mmt=2 -y /tmp/ksrc/kernel-src.7z.001 -okernel
+          test -d kernel/arch/arm64 || { echo "内核源码解压失败"; exit 1; }
+          echo "内核源码就绪: $(find kernel -type f | wc -l) 文件"
+
+      - name: 恢复工具链缓存
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: hotdogb-toolchain-${{ hashFiles('config/build.env') }}-v1
+
+      - name: 编译内核并生成 boot.img
+        env:
+          PROFILE: ${{ inputs.profile || 'clean' }}
+          JOBS: ${{ inputs.jobs || '4' }}
+          USE_SYSTEM_HOST_TOOLS: ${{ inputs.use_system_host_tools && '1' || '0' }}
+          CLANG_ARCHIVE_URL: ${{ vars.CLANG_ARCHIVE_URL }}
+          GCC64_URL: ${{ vars.GCC64_URL }}
+          GCC32_URL: ${{ vars.GCC32_URL }}
+          BUILDTOOLS_URL: ${{ vars.BUILDTOOLS_URL }}
+        run: |
+          chmod +x scripts/*.sh tools/*.py
+          ./scripts/build.sh --profile "$PROFILE" --jobs "$JOBS"
+
+      # 先生成时间戳和 Tag 名，后续步骤复用，保证源码包与 Tag 时间一致
+      - name: 计算北京时间 Tag 名
+        if: github.event_name != 'pull_request'
+        id: taginfo
+        run: |
+          set -euo pipefail
+          PROFILE="${{ inputs.profile || 'clean' }}"
+          TS="$(TZ='Asia/Shanghai' date +'%Y%m%d-%H%M%S')"
+          TAG="v${TS}-${PROFILE}"
+          echo "TS=$TS"   >> "$GITHUB_OUTPUT"
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+          echo "PROFILE=$PROFILE" >> "$GITHUB_OUTPUT"
+          echo "将创建 Tag: $TAG"
+
+      # 打包完整离线源码：包含 Git 跟踪文件 + 完整 kernel/ + 完整 toolchain/（含 .ready 与 dl/）
+      - name: 打包离线源码（含 kernel 与完整 toolchain）
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          TS="${{ steps.taginfo.outputs.TS }}"
+          PROFILE="${{ steps.taginfo.outputs.PROFILE }}"
+          SRC_DIR="hotdogb-boot-src-${TS}-${PROFILE}"
+          SRC_NAME="${SRC_DIR}.tar.gz"
+          mkdir -p dist
+
+          # 前置检查：离线编译依赖 toolchain/.ready
+          if [ ! -f toolchain/.ready ]; then
+            echo "错误：toolchain/.ready 不存在，打包出来的源码包无法离线编译" >&2
+            exit 1
+          fi
+
+          rm -rf "/tmp/${SRC_DIR}"
+          mkdir -p "/tmp/${SRC_DIR}"
+
+          # 1) 仓库内被 Git 跟踪的文件（不含 .git、out/、dist/、toolchain/）
+          git archive --format=tar HEAD | tar -x -C "/tmp/${SRC_DIR}"
+
+          # 2) 内核源码（轻量模式下 kernel/ 不在 Git 里，必须显式拷入）
+          if [ -d kernel ]; then
+            rm -rf "/tmp/${SRC_DIR}/kernel"
+            cp -a kernel "/tmp/${SRC_DIR}/kernel"
+          fi
+
+          # 3) 完整工具链（含 .ready 和 dl/ 缓存，原样打包）
+          if [ -d toolchain ]; then
+            rm -rf "/tmp/${SRC_DIR}/toolchain"
+            cp -a toolchain "/tmp/${SRC_DIR}/toolchain"
+          fi
+
+          # 4) 生成离线编译说明
+          cat > "/tmp/${SRC_DIR}/OFFLINE-BUILD.md" <<'EOF'
+# 离线编译说明
+
+本源码包已包含：
+- 内核源码（kernel/）
+- 完整工具链（toolchain/，含 .ready 标记和 dl/ 下载缓存）
+
+`scripts/fetch-toolchain.sh` 检测到 toolchain/.ready 存在时会直接跳过工具链准备，
+因此解压后编译全程不需要联网。
+
+## 编译
+
+```bash
+tar -xzf hotdogb-boot-src-<时间>-<档位>.tar.gz
+cd hotdogb-boot-src-<时间>-<档位>
+./scripts/build.sh --profile clean --jobs 4
